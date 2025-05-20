@@ -1,65 +1,81 @@
+// src/app/spreadsheet/[id]/page.tsx
 "use client"
 
 import React, { useState, useEffect, useRef } from 'react';
-import { createClient } from '../../../utils/supabase/client';
-import { Save, Share2, Download, Trash2, Plus, FileSpreadsheet, Menu, User, LogOut } from 'lucide-react';
+import { createClient } from '@/utils/supabase/client';
+import { Save, ArrowLeft, Download, User, LogOut } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 
-// Initialize Supabase client from environment variables
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey);
-
-const SpreadsheetApp = () => {
+const SpreadsheetApp = ({ params }) => {
+  // Get the sheet ID from the URL params
+  const { id } = params;
+  
   // State management
   const [user, setUser] = useState(null);
-  const [sheets, setSheets] = useState([]);
-  const [currentSheet, setCurrentSheet] = useState(null);
-  const [data, setData] = useState([]);
+  const [sheet, setSheet] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
   const [selectedCell, setSelectedCell] = useState({ row: 0, col: 0 });
   const [cellValues, setCellValues] = useState({});
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
-  const [isSharing, setIsSharing] = useState(false);
-  const [shareEmail, setShareEmail] = useState('');
-  const [showSidebar, setShowSidebar] = useState(true);
+  const [saveStatus, setSaveStatus] = useState('');
   
+  const router = useRouter();
+  const supabase = createClient();
   const gridRef = useRef(null);
   const cellInputRef = useRef(null);
-  
-  // Generate initial empty data
-  const generateEmptySheet = () => {
-    const rows = 100;
-    const cols = 26; // A-Z
-    return {
-      name: 'Untitled Sheet',
-      rows,
-      cols,
-      cells: {}
-    };
-  };
   
   // Column header labels (A, B, C, etc.)
   const columnLabels = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i));
   
-  // Check user session on component mount
+  // Check user session and load sheet data on component mount
   useEffect(() => {
-    const checkSession = async () => {
+    const checkSessionAndLoadSheet = async () => {
+      setIsLoading(true);
       const { data: { session } } = await supabase.auth.getSession();
-      if (session) {
-        setUser(session.user);
-        fetchUserSheets(session.user.id);
+      
+      if (!session) {
+        router.push('/login-signup');
+        return;
+      }
+      
+      setUser(session.user);
+      
+      // Fetch the specific sheet
+      try {
+        console.log('Fetching sheet with ID:', id);
+        const { data, error } = await supabase
+          .from('sheets')
+          .select('*')
+          .eq('id', id)
+          .single();
+          
+        if (error) {
+          console.error('Error fetching sheet:', error);
+          if (error.code === 'PGRST116') {
+            // Sheet not found or no permission
+            router.push('/dashboard');
+            return;
+          }
+          throw error;
+        }
+        
+        console.log('Fetched sheet data:', data);
+        setSheet(data);
+        setCellValues(data.cells || {});
+      } catch (error) {
+        console.error('Error loading sheet:', error);
+        router.push('/dashboard');
+      } finally {
+        setIsLoading(false);
       }
     };
     
-    checkSession();
+    checkSessionAndLoadSheet();
     
     const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (event === 'SIGNED_IN' && session) {
-        setUser(session.user);
-        fetchUserSheets(session.user.id);
-      } else if (event === 'SIGNED_OUT') {
-        setUser(null);
-        setSheets([]);
-        setCurrentSheet(null);
+      if (event === 'SIGNED_OUT') {
+        router.push('/login-signup');
       }
     });
     
@@ -68,103 +84,95 @@ const SpreadsheetApp = () => {
         authListener.subscription.unsubscribe();
       }
     };
-  }, []);
+  }, [id, router]);
   
-  // Fetch user's sheets from Supabase
-  const fetchUserSheets = async (userId) => {
-    try {
-      const { data, error } = await supabase
-        .from('sheets')
-        .select('*')
-        .eq('user_id', userId);
-        
-      if (error) throw error;
-      
-      setSheets(data || []);
-      if (data && data.length > 0) {
-        setCurrentSheet(data[0]);
-        setCellValues(data[0].cells || {});
-      } else {
-        // Create a new sheet if user has none
-        createNewSheet(userId);
-      }
-    } catch (error) {
-      console.error('Error fetching sheets:', error);
-    }
-  };
-  
-  // Create a new sheet
-  const createNewSheet = async (userId) => {
-    try {
-      const newSheet = generateEmptySheet();
-      
-      const { data, error } = await supabase
-        .from('sheets')
-        .insert([
-          { 
-            name: newSheet.name, 
-            user_id: userId,
-            cells: {},
-            created_at: new Date(),
-            updated_at: new Date()
-          }
-        ])
-        .select();
-        
-      if (error) throw error;
-      
-      if (data && data.length > 0) {
-        setSheets([...sheets, data[0]]);
-        setCurrentSheet(data[0]);
-        setCellValues({});
-      }
-    } catch (error) {
-      console.error('Error creating new sheet:', error);
-    }
-  };
-  
-  // Save current sheet to Supabase
+  // Save sheet to Supabase
   const saveSheet = async () => {
-    if (!currentSheet) return;
+    if (!sheet) return;
     
     try {
+      setSaveStatus('saving');
+      console.log('Saving sheet with data:', {
+        cells: cellValues,
+        updated_at: new Date().toISOString()
+      });
+      
       const { error } = await supabase
         .from('sheets')
         .update({ 
           cells: cellValues,
-          updated_at: new Date()
+          updated_at: new Date().toISOString()
         })
-        .eq('id', currentSheet.id);
+        .eq('id', sheet.id);
         
-      if (error) throw error;
+      if (error) {
+        console.error('Error saving sheet:', error);
+        throw error;
+      }
+      
+      console.log('Sheet saved successfully');
+      
+      // Update local sheet data with new timestamp
+      setSheet({
+        ...sheet,
+        updated_at: new Date().toISOString()
+      });
+      
+      setSaveStatus('saved');
+      
+      // Reset save status after 2 seconds
+      setTimeout(() => {
+        setSaveStatus('');
+      }, 2000);
     } catch (error) {
       console.error('Error saving sheet:', error);
+      setSaveStatus('error');
+      
+      // Reset save status after 2 seconds
+      setTimeout(() => {
+        setSaveStatus('');
+      }, 2000);
     }
   };
   
-  // Delete current sheet
-  const deleteSheet = async () => {
-    if (!currentSheet) return;
+  // Handle sheet name change
+  const handleNameChange = async (e) => {
+    if (!sheet) return;
     
     try {
+      setSaveStatus('saving');
+      
       const { error } = await supabase
         .from('sheets')
-        .delete()
-        .eq('id', currentSheet.id);
+        .update({ 
+          name: e.target.value,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', sheet.id);
         
       if (error) throw error;
       
-      const updatedSheets = sheets.filter(sheet => sheet.id !== currentSheet.id);
-      setSheets(updatedSheets);
+      // Update local sheet data
+      setSheet({
+        ...sheet,
+        name: e.target.value,
+        updated_at: new Date().toISOString()
+      });
       
-      if (updatedSheets.length > 0) {
-        setCurrentSheet(updatedSheets[0]);
-        setCellValues(updatedSheets[0].cells || {});
-      } else {
-        createNewSheet(user.id);
-      }
+      setSaveStatus('saved');
+      
+      // Reset save status after 2 seconds
+      setTimeout(() => {
+        setSaveStatus('');
+      }, 2000);
     } catch (error) {
-      console.error('Error deleting sheet:', error);
+      console.error('Error updating sheet name:', error);
+      setSaveStatus('error');
+      
+      // Reset save status after 2 seconds
+      setTimeout(() => {
+        setSaveStatus('');
+      }, 2000);
     }
   };
   
@@ -192,48 +200,9 @@ const SpreadsheetApp = () => {
     return cellValues[cellId] || '';
   };
   
-  // Handle sharing sheet with another user
-  const handleShareSheet = async () => {
-    if (!currentSheet || !shareEmail) return;
-    
-    try {
-      // First, check if user exists
-      const { data: userData, error: userError } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('email', shareEmail)
-        .single();
-        
-      if (userError || !userData) {
-        alert('User not found');
-        return;
-      }
-      
-      // Create sharing permission in Supabase
-      const { error } = await supabase
-        .from('sheet_permissions')
-        .insert([
-          { 
-            sheet_id: currentSheet.id, 
-            user_id: userData.id,
-            permission: 'read',
-            created_at: new Date()
-          }
-        ]);
-        
-      if (error) throw error;
-      
-      alert(`Sheet shared with ${shareEmail}`);
-      setIsSharing(false);
-      setShareEmail('');
-    } catch (error) {
-      console.error('Error sharing sheet:', error);
-    }
-  };
-  
   // Export sheet as CSV
   const exportAsCSV = () => {
-    if (!currentSheet) return;
+    if (!sheet) return;
     
     // Find the maximum row and column indices
     let maxRow = 0;
@@ -268,7 +237,7 @@ const SpreadsheetApp = () => {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.setAttribute('href', url);
-    link.setAttribute('download', `${currentSheet.name}.csv`);
+    link.setAttribute('download', `${sheet.name}.csv`);
     link.style.visibility = 'hidden';
     document.body.appendChild(link);
     link.click();
@@ -278,11 +247,29 @@ const SpreadsheetApp = () => {
   // Handle sign out
   const handleSignOut = async () => {
     await supabase.auth.signOut();
+    router.push('/login-signup');
   };
   
-  // If not logged in, return to auth page (you'd handle this in your routing)
-  if (!user) {
-    return <div className="flex items-center justify-center h-screen">Please sign in to access your sheets.</div>;
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-gray-100">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-green-500"></div>
+      </div>
+    );
+  }
+
+  if (!sheet) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-gray-100">
+        <div className="text-center">
+          <h2 className="text-2xl font-semibold text-gray-700">Sheet not found</h2>
+          <p className="mt-2 text-gray-500">The sheet you're looking for doesn't exist or you don't have permission to access it.</p>
+          <Link href="/dashboard" className="mt-4 inline-block px-4 py-2 rounded-md bg-green-600 text-white hover:bg-green-700">
+            Back to Dashboard
+          </Link>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -291,30 +278,39 @@ const SpreadsheetApp = () => {
       <header className="bg-white shadow-sm">
         <div className="flex items-center justify-between px-4 py-2">
           <div className="flex items-center">
-            <FileSpreadsheet className="w-6 h-6 text-green-600 mr-2" />
+            <Link href="/dashboard" className="flex items-center text-gray-700 hover:text-gray-900 mr-4">
+              <ArrowLeft className="w-5 h-5 mr-1" />
+              <span>Back</span>
+            </Link>
+            
             <input 
               type="text" 
-              value={currentSheet?.name || 'Untitled'} 
+              value={sheet.name} 
               onChange={(e) => {
-                if (currentSheet) {
-                  setCurrentSheet({...currentSheet, name: e.target.value});
-                }
+                setSheet({...sheet, name: e.target.value});
               }}
-              onBlur={saveSheet}
+              onBlur={handleNameChange}
               className="font-semibold focus:outline-none focus:border-b-2 focus:border-green-500 px-1"
             />
           </div>
           
           <div className="flex items-center space-x-2">
-            <button onClick={saveSheet} className="flex items-center text-sm px-3 py-1 rounded hover:bg-gray-100">
-              <Save className="w-4 h-4 mr-1" />
-              Save
-            </button>
-            
-            <button onClick={() => setIsSharing(true)} className="flex items-center text-sm px-3 py-1 rounded hover:bg-gray-100">
-              <Share2 className="w-4 h-4 mr-1" />
-              Share
-            </button>
+            <div className="flex items-center">
+              <button onClick={saveSheet} className="flex items-center text-sm px-3 py-1 rounded hover:bg-gray-100">
+                <Save className="w-4 h-4 mr-1" />
+                Save
+              </button>
+              
+              {saveStatus === 'saving' && (
+                <span className="text-xs text-blue-500 ml-2">Saving...</span>
+              )}
+              {saveStatus === 'saved' && (
+                <span className="text-xs text-green-500 ml-2">Saved!</span>
+              )}
+              {saveStatus === 'error' && (
+                <span className="text-xs text-red-500 ml-2">Error saving!</span>
+              )}
+            </div>
             
             <button onClick={exportAsCSV} className="flex items-center text-sm px-3 py-1 rounded hover:bg-gray-100">
               <Download className="w-4 h-4 mr-1" />
@@ -334,6 +330,12 @@ const SpreadsheetApp = () => {
                   <div className="px-4 py-2 text-sm text-gray-700 border-b">
                     {user.email}
                   </div>
+                  <Link
+                    href="/dashboard"
+                    className="flex items-center w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                  >
+                    Dashboard
+                  </Link>
                   <button 
                     onClick={handleSignOut}
                     className="flex items-center w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
@@ -349,77 +351,11 @@ const SpreadsheetApp = () => {
       </header>
       
       <div className="flex flex-1 overflow-hidden">
-        {/* Documents Sidebar */}
-        {showSidebar && (
-          <div className="w-64 bg-white border-r overflow-y-auto">
-            <div className="px-4 py-3 border-b flex items-center justify-between">
-              <h2 className="font-medium">My Documents</h2>
-              <button 
-                onClick={() => createNewSheet(user.id)}
-                className="p-1 rounded-full hover:bg-gray-100"
-                title="Create new sheet"
-              >
-                <Plus className="w-5 h-5 text-gray-700" />
-              </button>
-            </div>
-            <div className="py-2">
-              {sheets.length > 0 ? (
-                sheets.map(sheet => (
-                  <button
-                    key={sheet.id}
-                    onClick={() => {
-                      setCurrentSheet(sheet);
-                      setCellValues(sheet.cells || {});
-                    }}
-                    className={`w-full px-4 py-2 text-left text-sm flex items-center ${
-                      currentSheet?.id === sheet.id
-                        ? 'bg-green-50 text-green-700'
-                        : 'text-gray-700 hover:bg-gray-50'
-                    }`}
-                  >
-                    <FileSpreadsheet className={`w-4 h-4 mr-2 ${
-                      currentSheet?.id === sheet.id
-                        ? 'text-green-600'
-                        : 'text-gray-500'
-                    }`} />
-                    <span className="truncate">{sheet.name || 'Untitled Sheet'}</span>
-                    <span className="ml-auto text-xs text-gray-400">
-                      {new Date(sheet.updated_at).toLocaleDateString()}
-                    </span>
-                  </button>
-                ))
-              ) : (
-                <div className="px-4 py-3 text-sm text-gray-500">
-                  No documents yet. Create one to get started.
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-        
         {/* Main Content */}
         <div className="flex-1 flex flex-col overflow-hidden">
           {/* Toolbar */}
           <div className="bg-white border-b px-4 py-1 flex items-center">
-            <div className="flex space-x-2">
-              <button
-                onClick={() => setShowSidebar(!showSidebar)}
-                className="p-1 rounded hover:bg-gray-100"
-                title={showSidebar ? "Hide sidebar" : "Show sidebar"}
-              >
-                <Menu className="w-4 h-4" />
-              </button>
-              
-              <button
-                onClick={deleteSheet}
-                className="p-1 rounded hover:bg-red-100 text-red-600"
-                title="Delete sheet"
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
-            </div>
-            
-            <div className="ml-4 flex-grow">
+            <div className="flex-grow">
               <input
                 ref={cellInputRef}
                 type="text"
@@ -427,6 +363,7 @@ const SpreadsheetApp = () => {
                 onChange={handleCellChange}
                 onBlur={() => saveSheet()}
                 className="w-full px-2 py-1 border rounded focus:outline-none focus:ring-1 focus:ring-green-500"
+                placeholder={`${columnLabels[selectedCell.col]}${selectedCell.row + 1}`}
               />
             </div>
           </div>
@@ -483,51 +420,6 @@ const SpreadsheetApp = () => {
           </div>
         </div>
       </div>
-      
-      {/* Share modal */}
-      {isSharing && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-96">
-            <h3 className="text-lg font-medium mb-4">Share sheet</h3>
-            
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-700 mb-1">Email address</label>
-              <input
-                type="email"
-                value={shareEmail}
-                onChange={(e) => setShareEmail(e.target.value)}
-                className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-1 focus:ring-green-500"
-                placeholder="user@example.com"
-              />
-            </div>
-            
-            <div className="mb-6">
-              <label className="block text-sm font-medium text-gray-700 mb-1">Access Type</label>
-              <select
-                className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-1 focus:ring-green-500"
-              >
-                <option value="read">Can view</option>
-                <option value="write">Can edit</option>
-              </select>
-            </div>
-            
-            <div className="flex justify-end space-x-2">
-              <button
-                onClick={() => setIsSharing(false)}
-                className="px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-md"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleShareSheet}
-                className="px-4 py-2 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-md"
-              >
-                Share
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
