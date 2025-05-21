@@ -5,12 +5,16 @@ import type { UserRole } from '../../../../lib/permit';
 
 export async function POST(request: Request) {
   try {
-    const { user, role } = await request.json();
+    const { user, role: incomingRole } = await request.json();
+    
+    // Convert the incoming role to lowercase for comparison and consistency
+    const role = incomingRole?.toLowerCase();
     
     console.log('[Permit.io] Attempting to sync user:', {
       userId: user.id,
       email: user.email,
-      role
+      originalRole: incomingRole,
+      normalizedRole: role
     });
 
     // First sync the user
@@ -29,17 +33,16 @@ export async function POST(request: Request) {
     }
 
     // Only assign role if one was provided 
-
     if (role) {
       // Validate role
-      const validRoles: UserRole[] = ['FreeUser', 'PremiumUser'];
+      const validRoles: UserRole[] = ['owner', 'editor', 'viewer'];
       if (!validRoles.includes(role as UserRole)) {
-        throw new Error('Invalid role provided');
+        throw new Error(`Invalid role provided: ${incomingRole}. Valid roles are: owner, editor, viewer`);
       }
 
-      // Assign role
+      // Assign role - now we're using the lowercase role
       const roleResult = await permit.api.assignRole({
-        role,
+        role, // This is now lowercase
         tenant: "default",
         user: user.id
       });

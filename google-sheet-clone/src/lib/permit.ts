@@ -5,8 +5,8 @@ import { Permit } from "permitio";
 const initPermit = () => {
   try {
     return new Permit({
-      pdp: "https://cloudpdp.api.permit.io",
-      token: process.env.PERMIT_API_KEY,
+      pdp: "http://localhost:7766/",
+      token: "permit_key_rrnA8tGmJ0pztw5Qxr0KngOI3nSoHStJFCvyjVnZBbtw7UgpLTiDDDtkCu0Qz5yK1uYsskBcbJqESHeIsfR0bM",
     });
   } catch (error) {
     console.error("[Permit.io] Failed to initialize:", error);
@@ -16,20 +16,14 @@ const initPermit = () => {
 
 const permit = initPermit();
 
-// Define our action types
-export type Actions = "cananalyse" | "cancomment" | "cancreate" | "canview";
+// Define our action types for spreadsheets
+export type Actions = "create" | "read" | "update";
 
 // Define our resource types
-export type Resources =
-  | "SocialsDashboard" // For the user's 
+export type Resources = "SheetDocument";
 
-
-// Define our role types
-export type UserRole =
-  | "account-owner"
-  | "analytics-viewer"
-  | "content-manager"
-  | "engagement-specialist";
+// Define our role types for spreadsheets
+export type UserRole = "owner" | "editor" | "viewer";
 
 // Enhanced logging with timestamps
 const logPermitAction = (action: string, details: any) => {
@@ -53,141 +47,79 @@ export const verifyUserExists = async (userId: string): Promise<boolean> => {
 };
 
 // Permission check function
-// In your permit.ts file, update the check function:
-const check = async (action: Actions, resource: Resources, userId: string) => {
+export const check = async (userId: string, action: Actions, resource: string) => {
   try {
-    // Get the base URL - in development it's localhost, in production your domain
-    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3001";
-
-    const response = await fetch(`${baseUrl}/api/permit/check`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        userId,
-        action,
-        resource,
-      }),
-    });
-
-    const data = await response.json();
-    return data.permitted;
+    logPermitAction("Checking permission", { userId, action, resource });
+    return await permit.check(userId, action, resource);
   } catch (error) {
     console.error("Permission check failed:", error);
     return false;
   }
 };
 
-
-export const checkSocialMediaPermissions = async (userId: string) => {
-  const requestId = logPermitAction("Checking social media permissions", { userId });
-
+// Create a spreadsheet resource in Permit.io
+export const createSpreadsheetResource = async (spreadsheetId: string) => {
   try {
-    // Check permissions based on the defined actions
-    const permissions = {
-      canViewAnalytics: await check("cananalyse", "SocialsDashboard", userId),
-      canCreatePosts: await check("cancreate", "SocialsDashboard", userId),
-      // canEditPosts: await check("cancreate", "SocialsDashboard", userId),
-      // canDeletePosts: await check("cancreate", "SocialsDashboard", userId),
-      canRespondToComments: await check("cancomment", "SocialsDashboard", userId),
-      // canAccessMessages: await check("cancomment", "SocialsDashboard", userId),
-      // canModifySettings: await check("cancreate", "SocialsDashboard", userId),
-      canView: await check("canview", "SocialsDashboard", userId),
-    };
-
-    logPermitAction(`Social media permissions result (${requestId})`, {
-      userId,
-      permissions,
+    logPermitAction("Creating spreadsheet resource", { spreadsheetId });
+    
+    const resourceInstance = await permit.api.resourceInstances.create({
+      key: spreadsheetId,
+      tenant: "default",
+      resource: "SheetDocument",
     });
-
-    return permissions;
+    
+    console.log("[Permit.io] Created spreadsheet resource:", resourceInstance);
+    return { success: true, data: resourceInstance };
   } catch (error) {
-    console.error(
-      `[Permit.io] (${requestId}) Social media permissions check failed:`,
-      error
-    );
-    return {
-      canViewAnalytics: false,
-      canCreatePosts: false,
-      canEditPosts: false,
-      canDeletePosts: false,
-      canRespondToComments: false,
-      canAccessMessages: false,
-      canModifySettings: false,
-      canView: false,
-    };
+    console.error("[Permit.io] Failed to create resource:", error);
+    return { success: false, error };
   }
 };
 
-// export const checkSocialaMediaPermissions = async (userId: string) => {
-//   const requestId = logPermitAction("Checking health permissions", { userId });
-
-//   try {
-//     // Check permissions based on the defined actions
-//     const [canViewFull, canViewLimited] = await Promise.all([
-//       check("viewrecordsfull", "HealthRecords", userId),
-//       check("viewrecordslimited", "HealthRecords", userId),
-//     ]);
-
-//     const permissions = {
-//       canViewFull, // For partners and parents viewing full records
-//       canViewLimited, // For doctors viewing limited records
-//       canUpdate: await check("update", "HealthRecords", userId),
-//     };
-
-//     logPermitAction(`Health permissions result (${requestId})`, {
-//       userId,
-//       permissions,
-//     });
-
-//     return permissions;
-//   } catch (error) {
-//     console.error(
-//       `[Permit.io] (${requestId}) Health permissions check failed:`,
-//       error
-//     );
-//     return {
-//       canViewFull: false,
-//       canViewLimited: false,
-//       canUpdate: false,
-//     };
-//   }
-// };
-
-// Enhanced user sync with role management
-export const syncUserToPermit = async (
-  user: { id: string; email: string },
+// Assign a role to a user for a specific spreadsheet
+export const assignSpreadsheetRole = async (
+  userId: string, 
+  spreadsheetId: string, 
   role: UserRole
 ) => {
-  const requestId = logPermitAction("Starting user sync", {
-    userId: user.id,
-    email: user.email,
-    role,
-  });
-
   try {
-    // Get base URL from environment or default to localhost
-    const baseUrl = "http://localhost:3001";
-
-    const response = await fetch(`${baseUrl}/api/permit/sync-user`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ user, role }),
+    logPermitAction("Assigning spreadsheet role", { userId, spreadsheetId, role });
+    
+    const roleAssignment = await permit.api.roleAssignments.assign({
+      user: userId,
+      role: `SheetDocument#${role.toLowerCase()}`,
+      resource_instance: spreadsheetId,
+      tenant: "default",
     });
+    
+    console.log("[Permit.io] Role assigned successfully:", roleAssignment);
+    return { success: true, data: roleAssignment };
+  } catch (error) {
+    console.error("[Permit.io] Failed to assign role:", error);
+    return { success: false, error };
+  }
+};
 
-    if (!response.ok) {
-      console.log(response);
-      throw new Error("Failed to sync user permissions");
-    }
-
-    const data = await response.json();
-    return data.success;
+// Sync a user with Permit.io
+export const syncUserWithPermit = async (user: { id: string; email: string; name?: string }) => {
+  try {
+    logPermitAction("Syncing user", user);
+    
+    const syncedUser = await permit.api.syncUser({
+      key: user.id,
+      email: user.email,
+      first_name: user.name || user.email.split('@')[0],
+      attributes: {
+        provider: "supabase",
+        last_sync: new Date().toISOString()
+      }
+    });
+    
+    console.log("[Permit.io] User synced successfully:", syncedUser);
+    return { success: true, data: syncedUser };
   } catch (error) {
     console.error("[Permit.io] Failed to sync user:", error);
-    return false;
+    return { success: false, error };
   }
 };
 

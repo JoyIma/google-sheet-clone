@@ -85,6 +85,7 @@ const Dashboard = () => {
         updated_at: new Date().toISOString()
       });
       
+      // 1. Create the sheet in Supabase
       const { data, error } = await supabase
         .from('sheets')
         .insert([
@@ -103,9 +104,54 @@ const Dashboard = () => {
         throw error;
       }
       
-      console.log('Sheet created successfully:', data);
+      console.log('Sheet created successfully in Supabase:', data);
       
       if (data && data.length > 0) {
+        // 2. Create resource instance in Permit.io
+        try {
+          // Create a resource instance in Permit.io
+          const resourceResponse = await fetch('/api/permit/resource', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              action: 'create-resource',
+              spreadsheetId: data[0].id
+            }),
+          });
+          
+          if (!resourceResponse.ok) {
+            console.warn('Warning: Failed to create resource in Permit.io');
+          } else {
+            console.log('Resource created in Permit.io');
+            
+            // Assign the creator as an "owner" of that resource instance
+            const assignResponse = await fetch('/api/permit/resource', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                action: 'assign-role',
+                userId: user.id,
+                spreadsheetId: data[0].id,
+                role: 'owner'  // lowercase to match Permit.io
+              }),
+            });
+            
+            if (!assignResponse.ok) {
+              console.warn('Warning: Failed to assign owner role in Permit.io');
+            } else {
+              console.log('Owner role assigned in Permit.io');
+            }
+          }
+        } catch (permitError) {
+          console.error('Error with Permit.io integration:', permitError);
+          // Continue with the flow even if Permit.io fails
+        }
+        
+        // Update UI and state
         setSheets([data[0], ...sheets]);
         setNewSheetName('');
         setIsCreatingSheet(false);

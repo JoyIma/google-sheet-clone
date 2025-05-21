@@ -713,7 +713,7 @@ const SpreadsheetApp = ({ params }) => {
         <div className="text-center">
           <h2 className="text-2xl font-semibold text-gray-700">Sheet not found</h2>
           <p className="mt-2 text-gray-500">The sheet you're looking for doesn't exist or you don't have permission to access it.</p>
-          <Link href="/dashboard" className="mt-4 inline-block px-4 py-2 rounded-md bg-green-600 text-white hover:bg-green-700">
+          <Link href="/Dashboard" className="mt-4 inline-block px-4 py-2 rounded-md bg-green-600 text-white hover:bg-green-700">
             Back to Dashboard
           </Link>
         </div>
@@ -727,7 +727,7 @@ const SpreadsheetApp = ({ params }) => {
       <header className="bg-white shadow-sm">
         <div className="flex items-center justify-between px-4 py-2">
           <div className="flex items-center">
-            <Link href="/dashboard" className="flex items-center text-gray-700 hover:text-gray-900 mr-4">
+            <Link href="/Dashboard" className="flex items-center text-gray-700 hover:text-gray-900 mr-4">
               <ArrowLeft className="w-5 h-5 mr-1" />
               <span>Back</span>
             </Link>
