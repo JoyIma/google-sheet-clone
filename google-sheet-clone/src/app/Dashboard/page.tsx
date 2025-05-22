@@ -1,4 +1,4 @@
-// src/app/dashboard/page.tsx
+// src/app/Dashboard/page.tsx
 "use client"
 
 import React, { useState, useEffect } from 'react';
@@ -109,6 +109,8 @@ const Dashboard = () => {
       if (data && data.length > 0) {
         // 2. Create resource instance in Permit.io
         try {
+          setCreationStatus({ message: 'Setting up permissions...', type: 'info' });
+          
           // Create a resource instance in Permit.io
           const resourceResponse = await fetch('/api/permit/resource', {
             method: 'POST',
@@ -126,7 +128,7 @@ const Dashboard = () => {
           } else {
             console.log('Resource created in Permit.io');
             
-            // Assign the creator as an "owner" of that resource instance
+            // Assign the creator as an "Owner" of that resource instance
             const assignResponse = await fetch('/api/permit/resource', {
               method: 'POST',
               headers: {
@@ -136,7 +138,7 @@ const Dashboard = () => {
                 action: 'assign-role',
                 userId: user.id,
                 spreadsheetId: data[0].id,
-                role: 'owner'  // lowercase to match Permit.io
+                role: 'Owner'  // Capitalized to match your roles
               }),
             });
             

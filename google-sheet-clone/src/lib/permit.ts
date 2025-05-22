@@ -16,51 +16,36 @@ const initPermit = () => {
 
 const permit = initPermit();
 
-// Define our action types for spreadsheets
-export type Actions = "create" | "read" | "update";
-
-// Define our resource types
-export type Resources = "SheetDocument";
-
 // Define our role types for spreadsheets
-export type UserRole = "owner" | "editor" | "viewer";
+export type UserRole = "Owner" | "Editor" | "Viewer";
 
-// Enhanced logging with timestamps
-const logPermitAction = (action: string, details: any) => {
-  const requestId = Math.random().toString(36).substring(7);
-  const timestamp = new Date().toISOString();
-  console.log(
-    `[Permit.io] ${timestamp} (${requestId}) ${action}:`,
-    JSON.stringify(details, null, 2)
-  );
-  return requestId;
-};
-
-// Verify user exists in Permit.io
-export const verifyUserExists = async (userId: string): Promise<boolean> => {
+// Sync a user with Permit.io (used on signup)
+export const syncUserWithPermit = async (user: { id: string; email: string; name?: string }) => {
   try {
-    const user = await permit.api.getUser(userId);
-    return !!user;
+    console.log("[Permit.io] Syncing user:", user);
+    
+    const syncedUser = await permit.api.syncUser({
+      key: user.id,
+      email: user.email,
+      first_name: user.name || user.email.split('@')[0],
+      attributes: {
+        provider: "supabase",
+        last_sync: new Date().toISOString()
+      }
+    });
+    
+    console.log("[Permit.io] User synced successfully:", syncedUser);
+    return { success: true, data: syncedUser };
   } catch (error) {
-    return false;
-  }
-};
-
-// Permission check function
-export const check = async (userId: string, action: Actions, resource: string) => {
-  try {
-    logPermitAction("Checking permission", { userId, action, resource });
-    return await permit.check(userId, action, resource);
-  } catch (error) {
-    console.error("Permission check failed:", error);
-    return false;
+    console.error("[Permit.io] Failed to sync user:", error);
+    return { success: false, error };
   }
 };
 
 // Create a spreadsheet resource in Permit.io
 export const createSpreadsheetResource = async (spreadsheetId: string) => {
   try {
-    logPermitAction("Creating spreadsheet resource", { spreadsheetId });
+    console.log("[Permit.io] Creating spreadsheet resource:", spreadsheetId);
     
     const resourceInstance = await permit.api.resourceInstances.create({
       key: spreadsheetId,
@@ -83,11 +68,11 @@ export const assignSpreadsheetRole = async (
   role: UserRole
 ) => {
   try {
-    logPermitAction("Assigning spreadsheet role", { userId, spreadsheetId, role });
+    console.log("[Permit.io] Assigning spreadsheet role:", { userId, spreadsheetId, role });
     
     const roleAssignment = await permit.api.roleAssignments.assign({
       user: userId,
-      role: `SheetDocument#${role.toLowerCase()}`,
+      role: `SheetDocument#${role}`, // Keep original capitalization
       resource_instance: spreadsheetId,
       tenant: "default",
     });
@@ -96,29 +81,6 @@ export const assignSpreadsheetRole = async (
     return { success: true, data: roleAssignment };
   } catch (error) {
     console.error("[Permit.io] Failed to assign role:", error);
-    return { success: false, error };
-  }
-};
-
-// Sync a user with Permit.io
-export const syncUserWithPermit = async (user: { id: string; email: string; name?: string }) => {
-  try {
-    logPermitAction("Syncing user", user);
-    
-    const syncedUser = await permit.api.syncUser({
-      key: user.id,
-      email: user.email,
-      first_name: user.name || user.email.split('@')[0],
-      attributes: {
-        provider: "supabase",
-        last_sync: new Date().toISOString()
-      }
-    });
-    
-    console.log("[Permit.io] User synced successfully:", syncedUser);
-    return { success: true, data: syncedUser };
-  } catch (error) {
-    console.error("[Permit.io] Failed to sync user:", error);
     return { success: false, error };
   }
 };
