@@ -1,7 +1,6 @@
 // components/SimpleShareDialog.tsx
 import { useState, useEffect } from 'react';
-import { X, Copy, Check, Mail, Users } from 'lucide-react';
-import { createClient } from '@/utils/supabase/client';
+import { X, Copy, Check, Mail, Users, User } from 'lucide-react';
 
 interface ShareDialogProps {
   isOpen: boolean;
@@ -14,9 +13,9 @@ type ShareRole = 'Editor' | 'Viewer';
 export default function SimpleShareDialog({ isOpen, onClose, sheet }: ShareDialogProps) {
   const [shareLink, setShareLink] = useState('');
   const [isCopied, setIsCopied] = useState(false);
-  const [shareMethod, setShareMethod] = useState<'link' | 'email'>('link');
+  const [shareMethod, setShareMethod] = useState<'link' | 'userid'>('link');
   const [selectedRole, setSelectedRole] = useState<ShareRole>('Viewer');
-  const [emailToShare, setEmailToShare] = useState('');
+  const [userIdToShare, setUserIdToShare] = useState('');
   const [isSharing, setIsSharing] = useState(false);
   const [shareStatus, setShareStatus] = useState<{ message: string; type: 'success' | 'error' | '' }>({ message: '', type: '' });
   
@@ -25,7 +24,7 @@ export default function SimpleShareDialog({ isOpen, onClose, sheet }: ShareDialo
     if (isOpen && sheet) {
       generateShareLink();
       // Reset form when dialog opens
-      setEmailToShare('');
+      setUserIdToShare('');
       setShareStatus({ message: '', type: '' });
       setSelectedRole('Viewer');
     }
@@ -48,28 +47,37 @@ export default function SimpleShareDialog({ isOpen, onClose, sheet }: ShareDialo
     }, 2000);
   };
 
-  const handleEmailShare = async () => {
-    if (!emailToShare.trim()) {
-      setShareStatus({ message: 'Please enter an email address', type: 'error' });
+  // Handle paste in the input
+  const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    e.preventDefault();
+    const pastedText = e.clipboardData.getData('text');
+    setUserIdToShare(pastedText.trim());
+  };
+
+  const handleUserIdShare = async () => {
+    if (!userIdToShare.trim()) {
+      setShareStatus({ message: 'Please enter a user ID', type: 'error' });
       return;
     }
 
-    if (!emailToShare.includes('@')) {
-      setShareStatus({ message: 'Please enter a valid email address', type: 'error' });
+    // Basic UUID validation
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(userIdToShare.trim())) {
+      setShareStatus({ message: 'Please enter a valid user ID (UUID format)', type: 'error' });
       return;
     }
 
     setIsSharing(true);
-    setShareStatus({ message: 'Assigning permissions...', type: '' });
+    setShareStatus({ message: 'Syncing user to permissions system...', type: '' });
 
     try {
       console.log('Sharing spreadsheet:', {
-        email: emailToShare,
+        userId: userIdToShare.trim(),
         spreadsheetId: sheet.id,
         role: selectedRole
       });
 
-      // Step 1: First, ensure the user exists in Permit.io (sync them)
+      // Step 1: Sync the user to Permit.io using their ID
       const syncResponse = await fetch('/api/permit/sync-user', {
         method: 'POST',
         headers: {
@@ -77,9 +85,9 @@ export default function SimpleShareDialog({ isOpen, onClose, sheet }: ShareDialo
         },
         body: JSON.stringify({
           user: {
-            id: emailToShare, // Use email as ID
-            email: emailToShare,
-            name: emailToShare.split('@')[0] // Basic name from email
+            id: userIdToShare.trim(),
+            email: `user-${userIdToShare.trim()}@placeholder.com`, // Placeholder email
+            name: `User ${userIdToShare.trim().substring(0, 8)}` // Short name from ID
           }
         }),
       });
@@ -89,6 +97,8 @@ export default function SimpleShareDialog({ isOpen, onClose, sheet }: ShareDialo
         console.warn('User sync failed, but continuing with role assignment:', syncResult.error);
       }
 
+      setShareStatus({ message: 'Assigning permissions...', type: '' });
+
       // Step 2: Assign the role to the user for this specific spreadsheet
       const assignResponse = await fetch('/api/permit/resource', {
         method: 'POST',
@@ -97,7 +107,7 @@ export default function SimpleShareDialog({ isOpen, onClose, sheet }: ShareDialo
         },
         body: JSON.stringify({
           action: 'assign-role',
-          userId: emailToShare, // Use email as user ID
+          userId: userIdToShare.trim(), // Use the provided user ID
           spreadsheetId: sheet.id,
           role: selectedRole // "Editor" or "Viewer"
         }),
@@ -107,10 +117,10 @@ export default function SimpleShareDialog({ isOpen, onClose, sheet }: ShareDialo
 
       if (assignResult.success) {
         setShareStatus({ 
-          message: `✅ Successfully shared with ${emailToShare} as ${selectedRole}! They now have ${selectedRole.toLowerCase()} access to this spreadsheet.`, 
+          message: `✅ Successfully shared with user ${userIdToShare.trim().substring(0, 8)}... as ${selectedRole}! They now have ${selectedRole.toLowerCase()} access to this spreadsheet.`, 
           type: 'success' 
         });
-        setEmailToShare('');
+        setUserIdToShare('');
         
         console.log('Role assignment successful:', assignResult.data);
       } else {
@@ -156,15 +166,15 @@ export default function SimpleShareDialog({ isOpen, onClose, sheet }: ShareDialo
             Share Link
           </button>
           <button
-            onClick={() => setShareMethod('email')}
+            onClick={() => setShareMethod('userid')}
             className={`flex-1 flex items-center justify-center py-2 px-3 rounded-md text-sm font-medium transition-colors ${
-              shareMethod === 'email'
+              shareMethod === 'userid'
                 ? 'bg-white text-gray-900 shadow-sm'
                 : 'text-gray-600 hover:text-gray-900'
             }`}
           >
-            <Mail className="w-4 h-4 mr-2" />
-            Invite by Email
+            <User className="w-4 h-4 mr-2" />
+            Invite by User ID
           </button>
         </div>
 
@@ -220,38 +230,42 @@ export default function SimpleShareDialog({ isOpen, onClose, sheet }: ShareDialo
               </button>
             </div>
             <p className="mt-1 text-xs text-gray-500">
-              ⚠️ Note: Link sharing doesn't assign specific roles. Use "Invite by Email" to assign {selectedRole.toLowerCase()} permissions to specific users.
+              ⚠️ Note: Link sharing doesn't assign specific roles. Use "Invite by User ID" to assign {selectedRole.toLowerCase()} permissions to specific users.
             </p>
           </div>
         ) : (
-          /* Email invite section */
+          /* User ID invite section */
           <div className="mb-6">
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Email address
+              User ID
             </label>
             <div className="flex items-center space-x-2">
               <input
-                type="email"
-                value={emailToShare}
-                onChange={(e) => setEmailToShare(e.target.value)}
-                placeholder="Enter email address"
-                className="flex-1 rounded-md border-gray-300 shadow-sm focus:border-green-500 focus:ring-green-500 sm:text-sm px-3 py-2"
+                type="text"
+                value={userIdToShare}
+                onChange={(e) => setUserIdToShare(e.target.value)}
+                onPaste={handlePaste}
+                placeholder="Enter user ID (UUID format)"
+                className="flex-1 rounded-md border-gray-300 shadow-sm focus:border-green-500 focus:ring-green-500 sm:text-sm px-3 py-2 font-mono"
                 onKeyPress={(e) => {
                   if (e.key === 'Enter') {
-                    handleEmailShare();
+                    handleUserIdShare();
                   }
                 }}
               />
               <button
-                onClick={handleEmailShare}
-                disabled={isSharing || !emailToShare.trim()}
+                onClick={handleUserIdShare}
+                disabled={isSharing || !userIdToShare.trim()}
                 className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isSharing ? 'Sharing...' : 'Share'}
               </button>
             </div>
             <p className="mt-1 text-xs text-gray-500">
-              They will receive {selectedRole.toLowerCase()} access to this spreadsheet
+              They will receive {selectedRole.toLowerCase()} access to this spreadsheet. You can paste the user ID here.
+            </p>
+            <p className="mt-1 text-xs text-gray-400">
+              Format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
             </p>
           </div>
         )}

@@ -3,7 +3,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { createClient } from '@/utils/supabase/client';
-import { Save, ArrowLeft, Download, User, LogOut, Bold, Italic, AlignLeft, AlignCenter, AlignRight, Underline } from 'lucide-react';
+import { Save, ArrowLeft, Download, User, LogOut, Bold, Italic, AlignLeft, AlignCenter, AlignRight, Underline, Eye, Lock } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Share2 } from 'lucide-react';
@@ -39,6 +39,14 @@ const SpreadsheetApp = ({ params }) => {
     backgroundColor: '#ffffff'
   });
   
+  // Permission states
+  const [userPermissions, setUserPermissions] = useState({
+    canRead: false,
+    canUpdate: false,
+    isReadOnly: true,
+    role: 'Viewer'
+  });
+  
   const router = useRouter();
   const supabase = createClient();
   const gridRef = useRef(null);
@@ -47,8 +55,31 @@ const SpreadsheetApp = ({ params }) => {
   // Column header labels (A, B, C, etc.)
   const columnLabels = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i));
   
+  // Helper function to check sheet permissions
+  const checkSheetPermission = async (userId, sheetId, action) => {
+    try {
+      const response = await fetch('/api/permit/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId,
+          action,
+          resource: 'SheetDocument',
+          spreadsheetId: sheetId
+        })
+      });
+      
+      const result = await response.json();
+      return result.permitted;
+    } catch (error) {
+      console.error('Permission check failed:', error);
+      return false;
+    }
+  };
+  
   // Check user session and load sheet data on component mount
   useEffect(() => {
+
     const checkSessionAndLoadSheet = async () => {
       setIsLoading(true);
       const { data: { session } } = await supabase.auth.getSession();
@@ -73,11 +104,35 @@ const SpreadsheetApp = ({ params }) => {
           console.error('Error fetching sheet:', error);
           if (error.code === 'PGRST116') {
             // Sheet not found or no permission
-            router.push('/dashboard');
+            router.push('/Dashboard');
             return;
           }
           throw error;
         }
+        
+        // Check permissions for this sheet
+        const [canRead, canUpdate] = await Promise.all([
+          checkSheetPermission(session.user.id, id, 'read'),
+          checkSheetPermission(session.user.id, id, 'update')
+        ]);
+        
+        console.log('Permissions:', { canRead, canUpdate });
+        
+        if (!canRead) {
+          // User has no permission to access this sheet
+          router.push('/Dashboard');
+          return;
+        }
+        
+        // Set permission state
+        const permissions = {
+          canRead,
+          canUpdate,
+          isReadOnly: !canUpdate,
+          role: canUpdate ? (data.user_id === session.user.id ? 'Owner' : 'Editor') : 'Viewer'
+        };
+        
+        setUserPermissions(permissions);
         
         console.log('Fetched sheet data:', data);
         setSheet(data);
@@ -90,7 +145,7 @@ const SpreadsheetApp = ({ params }) => {
         }
       } catch (error) {
         console.error('Error loading sheet:', error);
-        router.push('/dashboard');
+        router.push('/Dashboard');
       } finally {
         setIsLoading(false);
       }
@@ -111,7 +166,7 @@ const SpreadsheetApp = ({ params }) => {
     };
   }, [id, router]);
   
-  // Add keyboard shortcuts for copy/paste
+  // Add keyboard shortcuts for copy/paste (only if user can update)
   useEffect(() => {
     const handleKeyboardShortcuts = (e) => {
       // Check if Ctrl key (or Command key on Mac) is pressed
@@ -123,9 +178,11 @@ const SpreadsheetApp = ({ params }) => {
             e.preventDefault();
             handleCopy();
             break;
-          case 'v': // Paste
-            e.preventDefault();
-            handlePaste();
+          case 'v': // Paste (only if user can update)
+            if (userPermissions.canUpdate) {
+              e.preventDefault();
+              handlePaste();
+            }
             break;
         }
       }
@@ -136,10 +193,12 @@ const SpreadsheetApp = ({ params }) => {
     return () => {
       window.removeEventListener('keydown', handleKeyboardShortcuts);
     };
-  }, [selectedCell, selectionStart, selectionEnd, clipboard, cellValues]);
+  }, [selectedCell, selectionStart, selectionEnd, clipboard, cellValues, userPermissions.canUpdate]);
   
-  // Add autosave functionality
+  // Add autosave functionality (only if user can update)
   useEffect(() => {
+    if (!userPermissions.canUpdate) return;
+    
     // Set up a debounced save
     const saveTimeout = setTimeout(() => {
       if (sheet && Object.keys(cellValues).length > 0) {
@@ -148,10 +207,12 @@ const SpreadsheetApp = ({ params }) => {
     }, 2000); // 2 seconds after last change
     
     return () => clearTimeout(saveTimeout);
-  }, [cellValues, cellFormatting, columnWidths]);
+  }, [cellValues, cellFormatting, columnWidths, userPermissions.canUpdate]);
   
-  // Column resize functionality
+  // Column resize functionality (only if user can update)
   const startColumnResize = (columnIndex, e) => {
+    if (!userPermissions.canUpdate) return;
+    
     e.preventDefault();
     e.stopPropagation();
     
@@ -174,9 +235,9 @@ const SpreadsheetApp = ({ params }) => {
     document.addEventListener('mouseup', handleMouseUp);
   };
   
-  // Save sheet to Supabase
+  // Save sheet to Supabase (only if user can update)
   const saveSheet = async () => {
-    if (!sheet) return;
+    if (!sheet || !userPermissions.canUpdate) return;
     
     try {
       setSaveStatus('saving');
@@ -237,9 +298,9 @@ const SpreadsheetApp = ({ params }) => {
     }
   };
   
-  // Handle sheet name change
+  // Handle sheet name change (only if user can update)
   const handleNameChange = async (e) => {
-    if (!sheet) return;
+    if (!sheet || !userPermissions.canUpdate) return;
     
     try {
       setSaveStatus('saving');
@@ -323,14 +384,16 @@ const SpreadsheetApp = ({ params }) => {
       backgroundColor: formats.backgroundColor || '#ffffff'
     });
     
-    // Focus the input when a cell is selected
-    if (cellInputRef.current) {
+    // Focus the input when a cell is selected (only if user can update)
+    if (cellInputRef.current && userPermissions.canUpdate) {
       cellInputRef.current.focus();
     }
   };
   
-  // Handle cell value change
+  // Handle cell value change (only if user can update)
   const handleCellChange = (e) => {
+    if (!userPermissions.canUpdate) return;
+    
     const cellId = `${selectedCell.row}-${selectedCell.col}`;
     const newValues = { ...cellValues };
     newValues[cellId] = e.target.value;
@@ -362,9 +425,9 @@ const SpreadsheetApp = ({ params }) => {
     return cellFormatting[cellId] || {};
   };
   
-  // Update cell formatting
+  // Update cell formatting (only if user can update)
   const updateCellFormatting = (format) => {
-    if (!selectedCell) return;
+    if (!selectedCell || !userPermissions.canUpdate) return;
     
     const cellId = `${selectedCell.row}-${selectedCell.col}`;
     const newFormatting = { ...cellFormatting };
@@ -525,7 +588,7 @@ const SpreadsheetApp = ({ params }) => {
   };
   
   const handlePaste = () => {
-    if (!clipboard || !selectedCell) return;
+    if (!clipboard || !selectedCell || !userPermissions.canUpdate) return;
     
     const { data, formatting, width, height } = clipboard;
     const { row: startRow, col: startCol } = selectedCell;
@@ -605,9 +668,9 @@ const SpreadsheetApp = ({ params }) => {
     router.push('/login-signup');
   };
   
-  // Format the current cell
+  // Format the current cell (only if user can update)
   const formatCurrentCell = (format) => {
-    if (!selectedCell) return;
+    if (!selectedCell || !userPermissions.canUpdate) return;
     updateCellFormatting(format);
   };
   
@@ -615,86 +678,109 @@ const SpreadsheetApp = ({ params }) => {
   const FormattingToolbar = () => {
     return (
       <div className="bg-white border-b px-4 py-1 flex items-center space-x-2">
-        <button
-          onClick={() => formatCurrentCell({ bold: !activeFormats.bold })}
-          className={`p-1 rounded ${activeFormats.bold ? 'bg-gray-200' : 'hover:bg-gray-100'}`}
-          title="Bold"
-        >
-          <Bold className="h-4 w-4" />
-        </button>
-        
-        <button
-          onClick={() => formatCurrentCell({ italic: !activeFormats.italic })}
-          className={`p-1 rounded ${activeFormats.italic ? 'bg-gray-200' : 'hover:bg-gray-100'}`}
-          title="Italic"
-        >
-          <Italic className="h-4 w-4" />
-        </button>
-        
-        <button
-          onClick={() => formatCurrentCell({ underline: !activeFormats.underline })}
-          className={`p-1 rounded ${activeFormats.underline ? 'bg-gray-200' : 'hover:bg-gray-100'}`}
-          title="Underline"
-        >
-          <Underline className="h-4 w-4" />
-        </button>
-        
-        <div className="h-4 border-l border-gray-300 mx-1"></div>
-        
-        <button
-          onClick={() => formatCurrentCell({ textAlign: 'left' })}
-          className={`p-1 rounded ${activeFormats.textAlign === 'left' ? 'bg-gray-200' : 'hover:bg-gray-100'}`}
-          title="Align Left"
-        >
-          <AlignLeft className="h-4 w-4" />
-        </button>
-        
-        <button
-          onClick={() => formatCurrentCell({ textAlign: 'center' })}
-          className={`p-1 rounded ${activeFormats.textAlign === 'center' ? 'bg-gray-200' : 'hover:bg-gray-100'}`}
-          title="Align Center"
-        >
-          <AlignCenter className="h-4 w-4" />
-        </button>
-        
-        <button
-          onClick={() => formatCurrentCell({ textAlign: 'right' })}
-          className={`p-1 rounded ${activeFormats.textAlign === 'right' ? 'bg-gray-200' : 'hover:bg-gray-100'}`}
-          title="Align Right"
-        >
-          <AlignRight className="h-4 w-4" />
-        </button>
-        <button 
-          onClick={() => setIsShareDialogOpen(true)} 
-          className="flex items-center text-sm px-3 py-1 rounded hover:bg-gray-100"
-        >
-          <Share2 className="w-4 h-4 mr-1" />
-          Share
-        </button>
-        
-        <div className="h-4 border-l border-gray-300 mx-1"></div>
-        
-        <div className="flex items-center">
-          <label htmlFor="text-color" className="text-xs text-gray-500 mr-1">Color:</label>
-          <input
-            type="color"
-            id="text-color"
-            value={activeFormats.textColor}
-            onChange={(e) => formatCurrentCell({ textColor: e.target.value })}
-            className="w-5 h-5 border border-gray-300 cursor-pointer"
-          />
+        {/* Permission indicator */}
+        <div className="flex items-center mr-4 px-2 py-1 rounded-md bg-gray-100">
+          {userPermissions.isReadOnly ? (
+            <>
+              <Eye className="w-4 h-4 mr-1 text-gray-600" />
+              <span className="text-xs text-gray-600">View Only ({userPermissions.role})</span>
+            </>
+          ) : (
+            <>
+              <span className="text-xs text-green-600">Edit Mode ({userPermissions.role})</span>
+            </>
+          )}
         </div>
+
+        {/* Formatting buttons - only show if user can update */}
+        {userPermissions.canUpdate && (
+          <>
+            <button
+              onClick={() => formatCurrentCell({ bold: !activeFormats.bold })}
+              className={`p-1 rounded ${activeFormats.bold ? 'bg-gray-200' : 'hover:bg-gray-100'}`}
+              title="Bold"
+            >
+              <Bold className="h-4 w-4" />
+            </button>
+            
+            <button
+              onClick={() => formatCurrentCell({ italic: !activeFormats.italic })}
+              className={`p-1 rounded ${activeFormats.italic ? 'bg-gray-200' : 'hover:bg-gray-100'}`}
+              title="Italic"
+            >
+              <Italic className="h-4 w-4" />
+            </button>
+            
+            <button
+              onClick={() => formatCurrentCell({ underline: !activeFormats.underline })}
+              className={`p-1 rounded ${activeFormats.underline ? 'bg-gray-200' : 'hover:bg-gray-100'}`}
+              title="Underline"
+            >
+              <Underline className="h-4 w-4" />
+            </button>
+            
+            <div className="h-4 border-l border-gray-300 mx-1"></div>
+            
+            <button
+              onClick={() => formatCurrentCell({ textAlign: 'left' })}
+              className={`p-1 rounded ${activeFormats.textAlign === 'left' ? 'bg-gray-200' : 'hover:bg-gray-100'}`}
+              title="Align Left"
+            >
+              <AlignLeft className="h-4 w-4" />
+            </button>
+            
+            <button
+              onClick={() => formatCurrentCell({ textAlign: 'center' })}
+              className={`p-1 rounded ${activeFormats.textAlign === 'center' ? 'bg-gray-200' : 'hover:bg-gray-100'}`}
+              title="Align Center"
+            >
+              <AlignCenter className="h-4 w-4" />
+            </button>
+            
+            <button
+              onClick={() => formatCurrentCell({ textAlign: 'right' })}
+              className={`p-1 rounded ${activeFormats.textAlign === 'right' ? 'bg-gray-200' : 'hover:bg-gray-100'}`}
+              title="Align Right"
+            >
+              <AlignRight className="h-4 w-4" />
+            </button>
+            
+            <div className="h-4 border-l border-gray-300 mx-1"></div>
+            
+            <div className="flex items-center">
+              <label htmlFor="text-color" className="text-xs text-gray-500 mr-1">Color:</label>
+              <input
+                type="color"
+                id="text-color"
+                value={activeFormats.textColor}
+                onChange={(e) => formatCurrentCell({ textColor: e.target.value })}
+                className="w-5 h-5 border border-gray-300 cursor-pointer"
+              />
+            </div>
+            
+            <div className="flex items-center">
+              <label htmlFor="bg-color" className="text-xs text-gray-500 mr-1">Fill:</label>
+              <input
+                type="color"
+                id="bg-color"
+                value={activeFormats.backgroundColor}
+                onChange={(e) => formatCurrentCell({ backgroundColor: e.target.value })}
+                className="w-5 h-5 border border-gray-300 cursor-pointer"
+              />
+            </div>
+          </>
+        )}
         
-        <div className="flex items-center">
-          <label htmlFor="bg-color" className="text-xs text-gray-500 mr-1">Fill:</label>
-          <input
-            type="color"
-            id="bg-color"
-            value={activeFormats.backgroundColor}
-            onChange={(e) => formatCurrentCell({ backgroundColor: e.target.value })}
-            className="w-5 h-5 border border-gray-300 cursor-pointer"
-          />
-        </div>
+        {/* Share button - only show for owners */}
+        {userPermissions.role === 'Owner' && (
+          <button 
+            onClick={() => setIsShareDialogOpen(true)} 
+            className="flex items-center text-sm px-3 py-1 rounded hover:bg-gray-100 ml-4"
+          >
+            <Share2 className="w-4 h-4 mr-1" />
+            Share
+          </button>
+        )}
       </div>
     );
   };
@@ -732,34 +818,44 @@ const SpreadsheetApp = ({ params }) => {
               <span>Back</span>
             </Link>
             
-            <input 
-              type="text" 
-              value={sheet.name} 
-              onChange={(e) => {
-                setSheet({...sheet, name: e.target.value});
-              }}
-              onBlur={handleNameChange}
-              className="font-semibold focus:outline-none focus:border-b-2 focus:border-green-500 px-1"
-            />
+            {userPermissions.canUpdate ? (
+              <input 
+                type="text" 
+                value={sheet.name} 
+                onChange={(e) => {
+                  setSheet({...sheet, name: e.target.value});
+                }}
+                onBlur={handleNameChange}
+                className="font-semibold focus:outline-none focus:border-b-2 focus:border-green-500 px-1"
+              />
+            ) : (
+              <span className="font-semibold px-1 flex items-center">
+                {sheet.name}
+                <Lock className="w-4 h-4 ml-2 text-gray-400" />
+              </span>
+            )}
           </div>
           
           <div className="flex items-center space-x-2">
-            <div className="flex items-center">
-              <button onClick={saveSheet} className="flex items-center text-sm px-3 py-1 rounded hover:bg-gray-100">
-                <Save className="w-4 h-4 mr-1" />
-                Save
-              </button>
-              
-              {saveStatus === 'saving' && (
-                <span className="text-xs text-blue-500 ml-2">Saving...</span>
-              )}
-              {saveStatus === 'saved' && (
-                <span className="text-xs text-green-500 ml-2">Saved!</span>
-              )}
-              {saveStatus === 'error' && (
-                <span className="text-xs text-red-500 ml-2">Error saving!</span>
-              )}
-            </div>
+            {/* Save button - only show if user can update */}
+            {userPermissions.canUpdate && (
+              <div className="flex items-center">
+                <button onClick={saveSheet} className="flex items-center text-sm px-3 py-1 rounded hover:bg-gray-100">
+                  <Save className="w-4 h-4 mr-1" />
+                  Save
+                </button>
+                
+                {saveStatus === 'saving' && (
+                  <span className="text-xs text-blue-500 ml-2">Saving...</span>
+                )}
+                {saveStatus === 'saved' && (
+                  <span className="text-xs text-green-500 ml-2">Saved!</span>
+                )}
+                {saveStatus === 'error' && (
+                  <span className="text-xs text-red-500 ml-2">Error saving!</span>
+                )}
+              </div>
+            )}
             
             <button onClick={exportAsCSV} className="flex items-center text-sm px-3 py-1 rounded hover:bg-gray-100">
               <Download className="w-4 h-4 mr-1" />
@@ -778,9 +874,10 @@ const SpreadsheetApp = ({ params }) => {
                 <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg py-1 z-10">
                   <div className="px-4 py-2 text-sm text-gray-700 border-b">
                     {user.email}
+                    <div className="text-xs text-gray-500">{userPermissions.role}</div>
                   </div>
                   <Link
-                    href="/dashboard"
+                    href="/Dashboard"
                     className="flex items-center w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
                   >
                     Dashboard
@@ -814,9 +911,12 @@ const SpreadsheetApp = ({ params }) => {
                 value={selectedCell ? getRawCellValue(selectedCell.row, selectedCell.col) : ''}
                 onChange={handleCellChange}
                 onKeyDown={handleKeyDown}
-                onBlur={() => saveSheet()}
-                className="w-full px-2 py-1 border rounded focus:outline-none focus:ring-1 focus:ring-green-500"
-                placeholder="Enter value or formula (start with =)"
+                onBlur={() => userPermissions.canUpdate && saveSheet()}
+                className={`w-full px-2 py-1 border rounded focus:outline-none focus:ring-1 focus:ring-green-500 ${
+                  userPermissions.isReadOnly ? 'bg-gray-50 cursor-not-allowed' : ''
+                }`}
+                placeholder={userPermissions.isReadOnly ? "Read-only mode" : "Enter value or formula (start with =)"}
+                disabled={userPermissions.isReadOnly}
               />
             </div>
           </div>
@@ -841,19 +941,22 @@ const SpreadsheetApp = ({ params }) => {
                         style={{ width: `${columnWidths[index]}px` }}
                       >
                         {col}
-                        <div 
-                          className="absolute top-0 right-0 h-full cursor-col-resize"
-                          onMouseDown={(e) => startColumnResize(index, e)}
-                          style={{
-                            width: '4px',
-                            right: '0',
-                            top: '0',
-                            height: '100%',
-                            position: 'absolute',
-                            cursor: 'col-resize',
-                            zIndex: 11
-                          }}
-                        />
+                        {/* Only show resize handle if user can update */}
+                        {userPermissions.canUpdate && (
+                          <div 
+                            className="absolute top-0 right-0 h-full cursor-col-resize"
+                            onMouseDown={(e) => startColumnResize(index, e)}
+                            style={{
+                              width: '4px',
+                              right: '0',
+                              top: '0',
+                              height: '100%',
+                              position: 'absolute',
+                              cursor: 'col-resize',
+                              zIndex: 11
+                            }}
+                          />
+                        )}
                       </th>
                     ))}
                   </tr>
@@ -883,8 +986,10 @@ const SpreadsheetApp = ({ params }) => {
                                 ? 'bg-blue-50 outline outline-2 outline-blue-500 outline-offset-0 z-5'
                                 : isCellSelected(rowIndex, colIndex)
                                   ? 'bg-blue-50 outline outline-1 outline-blue-300 outline-offset-0'
-                                  : 'hover:bg-gray-50'
-                            }`}
+                                  : userPermissions.isReadOnly 
+                                    ? 'hover:bg-gray-50 cursor-default'
+                                    : 'hover:bg-gray-50'
+                            } ${userPermissions.isReadOnly ? 'select-none' : ''}`}
                             style={{
                               width: `${columnWidths[colIndex]}px`,
                               fontWeight: formatting.bold ? 'bold' : 'normal',
@@ -892,7 +997,9 @@ const SpreadsheetApp = ({ params }) => {
                               textDecoration: formatting.underline ? 'underline' : 'none',
                               textAlign: formatting.textAlign || 'left',
                               color: formatting.textColor || '#000000',
-                              backgroundColor: formatting.backgroundColor || '#ffffff',
+                              backgroundColor: userPermissions.isReadOnly 
+                                ? (formatting.backgroundColor === '#ffffff' ? '#f9f9f9' : formatting.backgroundColor)
+                                : (formatting.backgroundColor || '#ffffff'),
                               whiteSpace: 'nowrap',
                               overflow: 'hidden',
                               textOverflow: 'ellipsis'
@@ -910,11 +1017,15 @@ const SpreadsheetApp = ({ params }) => {
           </div>
         </div>
       </div>
-      <SimpleShareDialog 
-        isOpen={isShareDialogOpen}
-        onClose={() => setIsShareDialogOpen(false)}
-        sheet={sheet}
-      />
+      
+      {/* Only show share dialog for owners */}
+      {userPermissions.role === 'Owner' && (
+        <SimpleShareDialog 
+          isOpen={isShareDialogOpen}
+          onClose={() => setIsShareDialogOpen(false)}
+          sheet={sheet}
+        />
+      )}
     </div>
   );
 };

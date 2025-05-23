@@ -15,6 +15,12 @@ const initPermit = () => {
 const permit = initPermit();
 // Define our role types for spreadsheets
 export type UserRole = "Owner" | "Editor" | "Viewer";
+
+// Define our action types
+export type SheetAction = "create" | "read" | "update";
+
+
+
 // Sync a user with Permit.io (used on signup)
 export const syncUserWithPermit = async (user: { id: string; email: string; name?: string }) => {
  try {
